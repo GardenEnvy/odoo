@@ -35,8 +35,8 @@ services:
     environment:
       HOST: db
       PORT: 5432
-      USER: ${POSTGRES_USER:-odoo}
-      PASSWORD: ${POSTGRES_PASSWORD:-Grass15Greener!}
+      USER: odoo
+      PASSWORD: Grass15Greener!
     volumes:
       # Persistent Odoo data (sessions, filestore, etc.)
       - odoo-web-data:/var/lib/odoo
