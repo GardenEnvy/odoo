@@ -11,9 +11,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: db
-      POSTGRES_USER: odoo
-      POSTGRES_PASSWORD: Grass15Greener!
+      POSTGRES_DB: ${POSTGRES_DB:-odoo}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - odoo-db-data:/var/lib/postgresql/data
@@ -27,16 +27,16 @@ services:
 
   # ─── Odoo 18.0 ───────────────────────────────────────────
   odoo:
-    image: 'odoo:18.0'
+    image: odoo:18.0
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_USER: odoo
-      DB_PASSWORD: Grass15Greener!
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
     volumes:
       # Persistent Odoo data (sessions, filestore, etc.)
       - odoo-web-data:/var/lib/odoo
