@@ -13,7 +13,7 @@ services:
     environment:
       POSTGRES_DB: db
       POSTGRES_USER: odoo
-      POSTGRES_PASSWORD:: Grass15Greener!
+      POSTGRES_PASSWORD: Grass15Greener!
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - odoo-db-data:/var/lib/postgresql/data
