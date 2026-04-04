@@ -27,15 +27,15 @@ services:
 
   # ─── Odoo 18.0 ───────────────────────────────────────────
   odoo:
-    image: odoo:18.0
+    image: 'odoo:18.0'
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DB_HOST: db
+      DB_HOST: 'db'
       DB_PORT: 5432
-      DB_USER: ${POSTGRES_USER:-odoo}
+      DB_USER: '${POSTGRES_USER:-odoo}"
       DB_PASSWORD: ${POSTGRES_PASSWORD:-Grass15Greener!}
     volumes:
       # Persistent Odoo data (sessions, filestore, etc.)
