@@ -33,7 +33,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DB_HOST: ${POSTGRES_DB:-odoo}
+      DB_HOST: db
       DB_PORT: 5432
       DB_USER: ${POSTGRES_USER:-odoo}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-Grass15Greener!}
