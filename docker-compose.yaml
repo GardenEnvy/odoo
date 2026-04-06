@@ -1,77 +1,195 @@
+##############################################################
+#  Odoo 18 CRM — Coolify v4 Production Stack
+#  Services: Odoo (web + workers + longpoll) · PostgreSQL · Redis
 ###############################################################
-# Odoo 18.0 — Coolify v4 deployment
-# Deploy via: Coolify > New Resource > Docker Compose (Raw)
-# Volumes: Coolify will persist data across deployments
-###############################################################
+
+version: "3.8"
 
 services:
 
-  # ─── PostgreSQL ──────────────────────────────────────────
+  # ─────────────────────────────────────────
+  # PostgreSQL — Odoo's required database
+  # ─────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
+    container_name: odoo_db
     restart: unless-stopped
+    env_file: .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-odoo}
       POSTGRES_USER: ${POSTGRES_USER:-odoo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
-      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - odoo-db-data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - odoo_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo} -d ${POSTGRES_DB:-odoo}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - odoo-internal
+      start_period: 20s
 
-  # ─── Odoo 18.0 ───────────────────────────────────────────
+  # ─────────────────────────────────────────
+  # Redis — session cache & long-polling bus
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: odoo_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - odoo_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─────────────────────────────────────────
+  # Odoo Web — main HTTP interface
+  # ─────────────────────────────────────────
   odoo:
     image: odoo:18.0
+    container_name: odoo_web
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
     environment:
       HOST: db
       PORT: 5432
       USER: ${POSTGRES_USER:-odoo}
-      PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
+      PASSWORD: ${POSTGRES_PASSWORD}
+    command: >
+      odoo
+      --db_host=db
+      --db_port=5432
+      --db_user=${POSTGRES_USER:-odoo}
+      --db_password=${POSTGRES_PASSWORD}
+      --database=${POSTGRES_DB:-odoo}
+      --http-port=8069
+      --longpolling-port=8072
+      --workers=${ODOO_WORKERS:-4}
+      --max-cron-threads=2
+      --limit-memory-hard=2684354560
+      --limit-memory-soft=2147483648
+      --limit-time-cpu=600
+      --limit-time-real=1200
+      --proxy-mode
+      --log-level=info
     volumes:
-      # Persistent Odoo data (sessions, filestore, etc.)
-      - odoo-web-data:/var/lib/odoo
-      # Odoo config file
-      - ./odoo.conf:/etc/odoo/odoo.conf:ro
-      # ✅ Custom addons folder — drop your modules here
-      - ./addons:/mnt/extra-addons
-    # Coolify's Traefik proxy will handle HTTPS termination.
-    # Remove/adjust these labels if you're using a custom domain
-    # configured directly inside Coolify's UI instead.
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.odoo.rule=Host(`${ODOO_DOMAIN:-odoo.example.com}`)"
-      - "traefik.http.routers.odoo.entrypoints=https"
-      - "traefik.http.routers.odoo.tls=true"
-      - "traefik.http.routers.odoo.tls.certresolver=letsencrypt"
-      - "traefik.http.services.odoo.loadbalancer.server.port=8069"
-      # Longpolling (live chat / bus)
-      - "traefik.http.routers.odoo-longpoll.rule=Host(`${ODOO_DOMAIN:-odoo.example.com}`) && PathPrefix(`/longpolling`)"
-      - "traefik.http.routers.odoo-longpoll.entrypoints=https"
-      - "traefik.http.routers.odoo-longpoll.tls=true"
-      - "traefik.http.routers.odoo-longpoll.tls.certresolver=letsencrypt"
-      - "traefik.http.services.odoo-longpoll.loadbalancer.server.port=8072"
+      - odoo_data:/var/lib/odoo
+      - odoo_addons:/mnt/extra-addons
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+    ports:
+      - "8069:8069"
     networks:
-      - odoo-internal
-      - coolify          # Coolify's shared proxy network
+      - odoo_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8069/web/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
-# ─── Volumes ─────────────────────────────────────────────────
+  # ─────────────────────────────────────────
+  # Odoo Longpoll — real-time notifications
+  # (Coolify routes /longpolling/* here)
+  # ─────────────────────────────────────────
+  odoo_longpoll:
+    image: odoo:18.0
+    container_name: odoo_longpoll
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      odoo:
+        condition: service_healthy
+    env_file: .env
+    command: >
+      odoo
+      --db_host=db
+      --db_port=5432
+      --db_user=${POSTGRES_USER:-odoo}
+      --db_password=${POSTGRES_PASSWORD}
+      --database=${POSTGRES_DB:-odoo}
+      --http-port=8072
+      --longpolling-port=8072
+      --workers=2
+      --max-cron-threads=0
+      --proxy-mode
+      --log-level=warn
+    volumes:
+      - odoo_data:/var/lib/odoo
+      - odoo_addons:/mnt/extra-addons
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+    ports:
+      - "8072:8072"
+    networks:
+      - odoo_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8072/longpolling/im_status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────
+  # Odoo Worker — background/cron jobs only
+  # ─────────────────────────────────────────
+  odoo_worker:
+    image: odoo:18.0
+    container_name: odoo_worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      odoo:
+        condition: service_healthy
+    env_file: .env
+    command: >
+      odoo
+      --db_host=db
+      --db_port=5432
+      --db_user=${POSTGRES_USER:-odoo}
+      --db_password=${POSTGRES_PASSWORD}
+      --database=${POSTGRES_DB:-odoo}
+      --no-http
+      --max-cron-threads=4
+      --workers=0
+      --log-level=warn
+    volumes:
+      - odoo_data:/var/lib/odoo
+      - odoo_addons:/mnt/extra-addons
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+    networks:
+      - odoo_net
+
+# ─────────────────────────────────────────
+# Named Volumes — persistent data
+# ─────────────────────────────────────────
 volumes:
-  odoo-db-data:
-  odoo-web-data:
+  db_data:
+    driver: local
+  redis_data:
+    driver: local
+  odoo_data:
+    driver: local
+  odoo_addons:      # drop your custom/OCA addons here
+    driver: local
 
-# ─── Networks ────────────────────────────────────────────────
+# ─────────────────────────────────────────
+# Network
+# ─────────────────────────────────────────
 networks:
-  odoo-internal:
+  odoo_net:
     driver: bridge
-  coolify:
-    external: true       # Pre-exists on every Coolify host
