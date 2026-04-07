@@ -1,0 +1,83 @@
+###############################################################
+# Odoo 18.0 — Dokploy deployment
+# Deploy via: Dokploy > New Project > Docker Compose
+# Paste this file or connect via Git repo
+###############################################################
+
+services:
+
+  # ─── PostgreSQL ──────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-odoo}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - odoo-internal
+
+  # ─── Odoo 18.0 ───────────────────────────────────────────
+  odoo:
+    image: odoo:18.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
+    volumes:
+      # Persistent Odoo data (sessions, filestore, etc.)
+      - odoo-web-data:/var/lib/odoo
+      # Odoo config file
+      - ./odoo.conf:/etc/odoo/odoo.conf:ro
+      # ✅ Custom addons folder — drop your modules here
+      - ./addons:/mnt/extra-addons
+    labels:
+      # ── Traefik (Dokploy's built-in proxy) ────────────────
+      - "traefik.enable=true"
+
+      # Main Odoo UI — HTTPS
+      - "traefik.http.routers.odoo.rule=Host(`${ODOO_DOMAIN:-odoo.example.com}`)"
+      - "traefik.http.routers.odoo.entrypoints=websecure"
+      - "traefik.http.routers.odoo.tls.certresolver=letsencrypt"
+      - "traefik.http.services.odoo.loadbalancer.server.port=8069"
+
+      # Redirect HTTP → HTTPS
+      - "traefik.http.routers.odoo-http.rule=Host(`${ODOO_DOMAIN:-odoo.example.com}`)"
+      - "traefik.http.routers.odoo-http.entrypoints=web"
+      - "traefik.http.routers.odoo-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+
+      # Longpolling router (live chat / bus notifications)
+      - "traefik.http.routers.odoo-longpoll.rule=Host(`${ODOO_DOMAIN:-odoo.example.com}`) && PathPrefix(`/longpolling`)"
+      - "traefik.http.routers.odoo-longpoll.entrypoints=websecure"
+      - "traefik.http.routers.odoo-longpoll.tls.certresolver=letsencrypt"
+      - "traefik.http.services.odoo-longpoll.loadbalancer.server.port=8072"
+    networks:
+      - odoo-internal
+      - dokploy-network     # Dokploy's shared Traefik proxy network
+
+# ─── Volumes ─────────────────────────────────────────────────
+volumes:
+  odoo-db-data:
+  odoo-web-data:
+
+# ─── Networks ────────────────────────────────────────────────
+networks:
+  odoo-internal:
+    driver: bridge
+  dokploy-network:
+    external: true          # Pre-exists on every Dokploy host
