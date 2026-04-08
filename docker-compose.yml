@@ -1,0 +1,49 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_USER=odoo
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+    networks:
+      - dokploy-network
+
+  odoo:
+    build: .
+    depends_on:
+      - db
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ./odoo.conf:/etc/odoo/odoo.conf
+    environment:
+      - HOST=db
+      - USER=odoo
+      - PASSWORD=odoo
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      # Main Routing (Port 8069)
+      - "traefik.http.routers.odoo-main.rule=Host(`odoo.yourdomain.com`)"
+      - "traefik.http.routers.odoo-main.entrypoints=websecure"
+      - "traefik.http.routers.odoo-main.tls=true"
+      - "traefik.http.routers.odoo-main.service=odoo-main-svc"
+      - "traefik.http.services.odoo-main-svc.loadbalancer.server.port=8069"
+      
+      # Longpolling Routing (Port 8072) - Required for Workers
+      - "traefik.http.routers.odoo-longpolling.rule=Host(`odoo.yourdomain.com`) && PathPrefix(`/longpolling`)"
+      - "traefik.http.routers.odoo-longpolling.entrypoints=websecure"
+      - "traefik.http.routers.odoo-longpolling.tls=true"
+      - "traefik.http.routers.odoo-longpolling.service=odoo-longpolling-svc"
+      - "traefik.http.services.odoo-longpolling-svc.loadbalancer.server.port=8072"
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  odoo-data:
+  odoo-db-data:
